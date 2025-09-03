@@ -3,7 +3,8 @@ import { SECONDS, SERVER_REGISTRY_DO_NAME, ServerMetadata } from "../types";
 
 /** Time constants */
 const HEALTH_CHECK_TIMEOUT = 5 * SECONDS; // 5 seconds
-const HEALTH_CHECK_INTERVAL = 20 * SECONDS; // 10 seconds
+const MIN_HEALTH_CHECK_INTERVAL = 10 * SECONDS; // Minimum interval for healthy servers
+const MAX_HEALTH_CHECK_INTERVAL = 60 * SECONDS; // Maximum interval for stable servers
 const MAX_OFFLINE_DURATION = 3 * 60 * SECONDS; // 3 minutes
 const MAX_HEALTH_CHECK_RETRIES = 3; // Maximum retries for health checks
 const RETRY_DELAY = 2 * SECONDS; // Delay between retries
@@ -31,6 +32,12 @@ export class ServerInstance extends DurableObject {
   private lastOfflineTime: number | null = null;
   /** Flag to indicate if server is being removed */
   private isBeingRemoved: boolean = false;
+  /** Track consecutive successful health checks */
+  private consecutiveSuccesses: number = 0;
+  /** Track consecutive failed health checks */
+  private consecutiveFailures: number = 0;
+  /** Current health check interval */
+  private currentInterval: number = MIN_HEALTH_CHECK_INTERVAL;
 
   /**
    * Constructor
@@ -57,9 +64,18 @@ export class ServerInstance extends DurableObject {
         const isBeingRemoved = await state.storage.get('isBeingRemoved');
         this.isBeingRemoved = !!isBeingRemoved;
         
+        const storedSuccesses = await state.storage.get('consecutiveSuccesses');
+        this.consecutiveSuccesses = storedSuccesses ? storedSuccesses as number : 0;
+        
+        const storedFailures = await state.storage.get('consecutiveFailures');
+        this.consecutiveFailures = storedFailures ? storedFailures as number : 0;
+        
+        const storedInterval = await state.storage.get('currentInterval');
+        this.currentInterval = storedInterval ? storedInterval as number : MIN_HEALTH_CHECK_INTERVAL;
+        
         if (this.serverMetadata?.endpoints?.health) {
           await this.checkStatus();
-          await this.state.storage.setAlarm(Date.now() + HEALTH_CHECK_INTERVAL);
+          await this.state.storage.setAlarm(Date.now() + this.currentInterval);
         }
 
       } catch (error) {
@@ -123,6 +139,21 @@ export class ServerInstance extends DurableObject {
       if (response.ok) {
         await this.updateStatus(ServerStatus.ONLINE);
         
+        // Update adaptive interval based on stability
+        this.consecutiveSuccesses++;
+        this.consecutiveFailures = 0;
+        await this.state.storage.put('consecutiveSuccesses', this.consecutiveSuccesses);
+        await this.state.storage.put('consecutiveFailures', 0);
+        
+        // Gradually increase interval for stable servers
+        if (this.consecutiveSuccesses > 5) {
+          this.currentInterval = Math.min(
+            this.currentInterval * 1.5,
+            MAX_HEALTH_CHECK_INTERVAL
+          );
+          await this.state.storage.put('currentInterval', this.currentInterval);
+        }
+        
         const serverRegistryId = this.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
         const serverRegistry = this.env.SERVER_REGISTRY.get(serverRegistryId);
         
@@ -136,7 +167,7 @@ export class ServerInstance extends DurableObject {
 
         this.lastOfflineTime = null;
         await this.state.storage.delete('lastOfflineTime');
-        console.log(`Server ${this.state.id} is online`);
+        console.log(`Server ${this.state.id} is online, next check in ${this.currentInterval/1000}s`);
       } else {
         const errorText = await response.text().catch(() => 'Unknown error');
         await this.handleOfflineStatus(`Health check failed with status ${response.status}: ${errorText}`);
@@ -164,6 +195,18 @@ export class ServerInstance extends DurableObject {
   private async handleOfflineStatus(reason: string = 'Unknown reason'): Promise<void> {
     if (this.serverStatus === ServerStatus.ONLINE) {
       console.log(`Server ${this.state.id} went offline: ${reason}`);
+    }
+    
+    // Update adaptive interval - decrease for unstable servers
+    this.consecutiveFailures++;
+    this.consecutiveSuccesses = 0;
+    await this.state.storage.put('consecutiveFailures', this.consecutiveFailures);
+    await this.state.storage.put('consecutiveSuccesses', 0);
+    
+    // Quickly retry for recently failed servers
+    if (this.consecutiveFailures < 3) {
+      this.currentInterval = MIN_HEALTH_CHECK_INTERVAL;
+      await this.state.storage.put('currentInterval', this.currentInterval);
     }
     
     await this.updateStatus(ServerStatus.OFFLINE);
@@ -299,7 +342,7 @@ export class ServerInstance extends DurableObject {
     if (this.serverStatus !== ServerStatus.OFFLINE ||
       !this.lastOfflineTime ||
       (Date.now() - this.lastOfflineTime) <= MAX_OFFLINE_DURATION) {
-      await this.state.storage.setAlarm(Date.now() + HEALTH_CHECK_INTERVAL);
+      await this.state.storage.setAlarm(Date.now() + this.currentInterval);
     }
   }
 }

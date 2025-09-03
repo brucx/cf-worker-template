@@ -50,16 +50,16 @@
 	"d1_databases": [
 		{
 			"binding": "TASK_DATABASE",
-			"database_name": "a1d-vu-tasks",
-			"database_id": "80b7c09e-ff59-4bee-a87e-8a73981ceafa",
+			"database_name": "tasks-rename-me",
+			"database_id": "paste-from-cloudflare-dashboard",
 			"migrations_dir": "src/migrations"
 		}
-	]
+	],
 	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 */
-	// "vars": { "MY_VARIABLE": "production_value" },
+	"vars": {},
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/

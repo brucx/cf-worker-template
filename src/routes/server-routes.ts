@@ -2,6 +2,9 @@ import { contentJson, OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 
 import { AppContext, SERVER_REGISTRY_DO_NAME } from "../types";
+import { handleError, logError, errorResponse } from "../lib/errors";
+import { validateServerEndpoints } from "../lib/validate";
+import { formatTimestamp } from "../lib/utils";
 
 /**
  * CreateServer route handler for POST /api/servers endpoint
@@ -40,19 +43,28 @@ export class CreateServer extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-    
-    await serverRegistry.registerServer(data.body.id, {
-      ...data.body,
-      lastHeartbeat: new Date().toISOString(),
-    });
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      
+      // Additional validation
+      validateServerEndpoints(data.body.endpoints);
+      
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      
+      await serverRegistry.registerServer(data.body.id, {
+        ...data.body,
+        lastHeartbeat: formatTimestamp(),
+      });
 
-    return c.json({
-      id: data.body.id,
-      success: true
-    });
+      return c.json({
+        id: data.body.id,
+        success: true
+      });
+    } catch (error) {
+      logError('CreateServer', error);
+      return handleError(error);
+    }
   }
 }
 
@@ -93,13 +105,18 @@ export class ListServers extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-    
-    const serversMap = await serverRegistry.getAllServers();
-    const servers = Array.from(serversMap.values());
-    
-    return c.json({ servers });
+    try {
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      
+      const serversMap = await serverRegistry.getAllServers();
+      const servers = Array.from(serversMap.values());
+      
+      return c.json({ servers });
+    } catch (error) {
+      logError('ListServers', error);
+      return handleError(error);
+    }
   }
 }
 
@@ -143,26 +160,31 @@ export class UpdateServerHeartbeat extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
 
-    const server = await serverRegistry.getServer(data.params.serverId);
-    
-    if (!server) {
-      return c.json({ error: "Service not found" }, 404);
+      const server = await serverRegistry.getServer(data.params.serverId);
+      
+      if (!server) {
+        return errorResponse(`Service ${data.params.serverId} not found`, 404);
+      }
+
+      const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
+      const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
+      
+      await serverInstance.getStatus();
+      
+      return c.json({
+        id: data.params.serverId,
+        success: true,
+        lastHeartbeat: server?.lastHeartbeat
+      });
+    } catch (error) {
+      logError('UpdateServerHeartbeat', error);
+      return handleError(error);
     }
-
-    const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
-    const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
-    
-    await serverInstance.getStatus();
-    
-    return c.json({
-      id: data.params.serverId,
-      success: true,
-      lastHeartbeat: server?.lastHeartbeat
-    });
   }
 }
 
@@ -214,22 +236,27 @@ export class GetServer extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-    
-    const server = await serverRegistry.getServer(data.params.serverId);
-    
-    if (!server) {
-      return c.json({ error: "Service not found" }, 404);
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      
+      const server = await serverRegistry.getServer(data.params.serverId);
+      
+      if (!server) {
+        return errorResponse(`Service ${data.params.serverId} not found`, 404);
+      }
+
+      const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
+      const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
+
+      const serverStatus = await serverInstance.getStatus();
+      
+      return c.json({ ...server, status: serverStatus });
+    } catch (error) {
+      logError('GetServer', error);
+      return handleError(error);
     }
-
-    const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
-    const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
-
-    const serverStatus = await serverInstance.getStatus();
-    
-    return c.json({ ...server, status: serverStatus });
   }
 }
 
@@ -272,23 +299,28 @@ export class DeleteServer extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-    
-    // Check if the server exists first
-    const server = await serverRegistry.getServer(data.params.serverId);
-    
-    if (!server) {
-      return c.json({ error: "Service not found" }, 404);
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      
+      // Check if the server exists first
+      const server = await serverRegistry.getServer(data.params.serverId);
+      
+      if (!server) {
+        return errorResponse(`Service ${data.params.serverId} not found`, 404);
+      }
+      
+      await serverRegistry.removeServer(data.params.serverId);
+      
+      return c.json({
+        id: data.params.serverId,
+        success: true
+      });
+    } catch (error) {
+      logError('DeleteServer', error);
+      return handleError(error);
     }
-    
-    await serverRegistry.removeServer(data.params.serverId);
-    
-    return c.json({
-      id: data.params.serverId,
-      success: true
-    });
   }
 }
 
@@ -321,17 +353,22 @@ export class CleanupStaleServers extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-    const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-    
-    // Use the provided maxAgeMins or default to the function's default value
-    const maxAgeMins = data.body?.maxAgeMins;
-    const removedServers = await serverRegistry.cleanupStaleServers(maxAgeMins);
-    
-    return c.json({
-      success: true,
-      removedServers,
-    });
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
+      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      
+      // Use the provided maxAgeMins or default to the function's default value
+      const maxAgeMins = data.body?.maxAgeMins;
+      const removedServers = await serverRegistry.cleanupStaleServers(maxAgeMins);
+      
+      return c.json({
+        success: true,
+        removedServers,
+      });
+    } catch (error) {
+      logError('CleanupStaleServers', error);
+      return handleError(error);
+    }
   }
 }

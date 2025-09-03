@@ -3,6 +3,8 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 
 import { AppContext, Task, TaskRequest, TaskStatus } from "../types";
+import { handleError, logError } from "../lib/errors";
+import { generateId } from "../lib/utils";
 
 export class CreateTask extends OpenAPIRoute {
   schema = {
@@ -33,36 +35,34 @@ export class CreateTask extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const taskId = nanoid();
-    const taskManagerId = c.env.TASK_MANAGER.idFromName(taskId);
-    const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
-
-    const url = new URL(c.req.url);
-    const callbackUrl = `${url.protocol}//${url.host}` + "/api/task/" + taskId;
-
-    const newTask = {
-      id: taskId,
-      status: TaskStatus.WAITING,
-      request: data.body as TaskRequest,
-      serverId: "",
-      result: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      callbackUrl,
-    } as Task;
     try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const taskId = generateId('task');
+      const taskManagerId = c.env.TASK_MANAGER.idFromName(taskId);
+      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
+
+      const url = new URL(c.req.url);
+      const callbackUrl = `${url.protocol}//${url.host}/api/task/${taskId}`;
+
+      const newTask: Task = {
+        id: taskId,
+        status: TaskStatus.WAITING,
+        request: data.body as TaskRequest,
+        serverId: "",
+        result: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        callbackUrl,
+      };
+      
       const taskDetails = await taskManager.createTask(newTask);
       return c.json({
         taskId,
         taskDetails
       });
     } catch (error) {
-      return c.json({
-        taskId,
-        taskDetails: null,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
+      logError('CreateTask', error);
+      return handleError(error);
     }
   }
 }
@@ -73,7 +73,7 @@ export class GetTask extends OpenAPIRoute {
     description: "Gets the current status and details of a task by ID",
     request: {
       params: z.object({
-        id: z.string().nanoid(),
+        id: z.string(),
       }),
     },
     responses: {
@@ -92,15 +92,24 @@ export class GetTask extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
-    const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
-    const taskDetails = await taskManager.getTask();
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
+      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
+      const taskDetails = await taskManager.getTask();
 
-    return c.json({
-      taskId: data.params.id,
-      taskDetails
-    });
+      if (!taskDetails) {
+        throw new Error(`Task ${data.params.id} not found`);
+      }
+
+      return c.json({
+        taskId: data.params.id,
+        taskDetails
+      });
+    } catch (error) {
+      logError('GetTask', error);
+      return handleError(error);
+    }
   }
 }
 
@@ -110,7 +119,7 @@ export class UpdateTask extends OpenAPIRoute {
     description: "Updates an existing task with new information",
     request: {
       params: z.object({
-        id: z.string().nanoid(),
+        id: z.string(),
       }),
       body: contentJson(z.object({
         backend_task_id: z.string(),
@@ -143,16 +152,21 @@ export class UpdateTask extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-    const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
-    const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
-    
-    const taskUpdate = data.body
-    const updatedTaskDetails = await taskManager.updateTask({...taskUpdate, task_id: data.params.id});
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
+      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
+      
+      const taskUpdate = data.body;
+      const updatedTaskDetails = await taskManager.updateTask({...taskUpdate, task_id: data.params.id});
 
-    return c.json({
-      taskId: data.params.id,
-      taskDetails: updatedTaskDetails
-    });
+      return c.json({
+        taskId: data.params.id,
+        taskDetails: updatedTaskDetails
+      });
+    } catch (error) {
+      logError('UpdateTask', error);
+      return handleError(error);
+    }
   }
 }

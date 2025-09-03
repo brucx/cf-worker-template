@@ -28,7 +28,7 @@ export class TaskManager extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-   * Save task to SQL database
+   * Save task to SQL database with optimized queries
    * @param task Task to save
    */
   private async saveTaskToDatabase(task: Task): Promise<void> {
@@ -37,24 +37,44 @@ export class TaskManager extends DurableObject<Cloudflare.Env> {
       const requestJson = JSON.stringify(task.request);
       const resultJson = task.result ? JSON.stringify(task.result) : null;
 
-      // Prepare the SQL statement
-      const statement = this.env.TASK_DATABASE.prepare(
-        "INSERT OR REPLACE INTO Tasks (id, status, request, serverId, result, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).bind(
-        task.id,
-        task.status,
-        requestJson,
-        task.serverId || null,
-        resultJson,
-        task.createdAt,
-        task.updatedAt
-      );
+      // First check if task exists
+      const existingTask = await this.env.TASK_DATABASE
+        .prepare("SELECT id FROM Tasks WHERE id = ?")
+        .bind(task.id)
+        .first();
 
-      await statement.run();
+      if (existingTask) {
+        // Update existing task - only update changed fields
+        const statement = this.env.TASK_DATABASE.prepare(
+          "UPDATE Tasks SET status = ?, result = ?, serverId = ?, updatedAt = ? WHERE id = ?"
+        ).bind(
+          task.status,
+          resultJson,
+          task.serverId || null,
+          task.updatedAt,
+          task.id
+        );
+        await statement.run();
+      } else {
+        // Insert new task
+        const statement = this.env.TASK_DATABASE.prepare(
+          "INSERT INTO Tasks (id, status, request, serverId, result, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
+          task.id,
+          task.status,
+          requestJson,
+          task.serverId || null,
+          resultJson,
+          task.createdAt,
+          task.updatedAt
+        );
+        await statement.run();
+      }
+      
       console.log(`Task ${task.id} saved to database`);
     } catch (error) {
       console.error(`Failed to save task ${task.id} to database:`, error);
-      // Don't throw here to avoid disrupting the main workflow
+      throw new Error(`Database operation failed: ${error}`);
     }
   }
 
@@ -91,14 +111,25 @@ export class TaskManager extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-   * Attempts to execute a task by trying available servers sequentially until success or exhaustion
+   * Implements exponential backoff for retries
+   */
+  private async delay(attempt: number): Promise<void> {
+    const baseDelay = 1000; // 1 second
+    const maxDelay = 30000; // 30 seconds
+    const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+
+  /**
+   * Attempts to execute a task by trying available servers with retry logic and exponential backoff
    * Implements retry logic with a maximum attempt limit equal to the number of available servers
    */
   private async executeTask(task: Task): Promise<void> {
     await this.updateServers();
 
-    const maxRetries = this.servers.size;
+    const maxRetries = Math.min(this.servers.size * 2, 5); // Try each server up to 2 times, max 5 total
     let retryCount = 0;
+    const errors: string[] = [];
 
     while (this.servers.size > 0 && retryCount < maxRetries) {
       const server = await this.pickRandomServer();
@@ -107,27 +138,25 @@ export class TaskManager extends DurableObject<Cloudflare.Env> {
       retryCount++;
       
       try {
-        // Create the request_json structure according to the new API format
-        const requestJson = {
-          data: task.request,
-          callback: {
-            callback_url: server.metadata.callback ? task.callbackUrl : undefined,
-          },
+        // Create proper JSON payload for the mock server
+        const payload = {
+          task_id: task.id,
+          request: task.request,
+          async: server.metadata.async || false,
+          callback_url: server.metadata.callback ? task.callbackUrl : undefined
         };
-
-        // Create FormData for multipart/form-data request
-        const formData = new FormData();
-        
-        // Add the JSON structure as request_json parameter
-        formData.append('request_json', JSON.stringify(requestJson));
 
         const response = await fetch(server.metadata.endpoints.predict, {
           method: "POST",
-          body: formData,
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
-          throw new Error(`Server responded with status ${response.status}, ${response.statusText}, ${await response.text()}`);
+          const errorText = await response.text();
+          throw new Error(`Server responded with status ${response.status}, ${response.statusText}, ${errorText}`);
         }
 
         task.status = TaskStatus.PROCESSING;
@@ -138,17 +167,26 @@ export class TaskManager extends DurableObject<Cloudflare.Env> {
         await this.state.storage.put("task", task);
         return;
       } catch (error) {
-        console.error(`Task execution failed on server ${server.id}: ${error}`, server);
+        const errorMsg = `Task execution failed on server ${server.id}: ${error}`;
+        console.error(errorMsg, server);
+        errors.push(errorMsg);
+        
+        // If there are more servers to try, add a delay before retrying
+        if (this.servers.size > 0 && retryCount < maxRetries) {
+          await this.delay(retryCount);
+        }
         continue;
       }
     }
 
     task.status = TaskStatus.FAILED;
     task.updatedAt = Date.now();
+    task.error = errors.join('; ');
     this.task = task;
+    await this.saveTaskToDatabase(this.task);
     await this.state.storage.put("task", this.task);
     throw new Error(
-      "Task execution failed: No available servers remaining or max retries reached"
+      `Task execution failed after ${retryCount} attempts: ${errors.join('; ')}`
     );
   }
 

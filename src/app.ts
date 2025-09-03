@@ -7,8 +7,28 @@ import type { Bindings } from './types';
 
 const app = new Hono({ strict: false });
 
+// Allowed origins for CORS - configure based on your environment
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [
+      'https://app.example.com',
+      'https://admin.example.com'
+    ]
+  : [
+      'http://localhost:3000',
+      'http://localhost:8787',
+      'http://127.0.0.1:8787'
+    ];
+
 app.use('/api/*', requestId())
-app.use('/api/*', cors({ credentials: true, origin: '*', }));
+app.use('/api/*', cors({ 
+  credentials: true, 
+  origin: (origin) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return '*';
+    // Check if origin is in allowed list
+    return allowedOrigins.includes(origin) ? origin : null;
+  }
+}));
 app.use('/api/*', (c: Context<{ Bindings: Bindings }>, next) => {
 const jwtMiddleware = jwt({ secret: c.env.JWT_SECRET, alg: 'HS256' })
 return jwtMiddleware(c, next)

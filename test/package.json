@@ -1,0 +1,17 @@
+{
+  "name": "cf-worker-tests",
+  "version": "1.0.0",
+  "description": "E2E tests for Cloudflare Worker",
+  "scripts": {
+    "test": "mocha e2e.test.js --timeout 60000",
+    "test:watch": "mocha e2e.test.js --watch --timeout 60000",
+    "mock-server": "node mock-server.js",
+    "test:ci": "npm run test -- --reporter json --reporter-option output=test-results.json"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0",
+    "chai": "^4.3.10",
+    "axios": "^1.6.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(npm install)",
+      "Bash(JWT_SECRET=test-secret-key npx mocha e2e.test.js --timeout 60000)",
+      "Bash(curl:*)",
+      "Bash(npx mocha:*)",
+      "Bash(npm run test:e2e:*)",
+      "Bash(npm test)",
+      "Bash(node:*)",
+      "Bash(pkill:*)"
+    ],
+    "deny": []
+  }
+}
