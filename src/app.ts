@@ -7,17 +7,14 @@ import type { Bindings } from './types';
 
 const app = new Hono({ strict: false });
 
-// Allowed origins for CORS - configure based on your environment
-const allowedOrigins = process.env.NODE_ENV === 'production' 
-  ? [
-      'https://app.example.com',
-      'https://admin.example.com'
-    ]
-  : [
-      'http://localhost:3000',
-      'http://localhost:8787',
-      'http://127.0.0.1:8787'
-    ];
+// Allowed origins for CORS
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:8787',
+  'http://127.0.0.1:8787',
+  'https://app.example.com',
+  'https://admin.example.com'
+];
 
 app.use('/api/*', requestId())
 app.use('/api/*', cors({ 
@@ -44,5 +41,12 @@ app.use('/api/servers', async (c: Context<{ Bindings: Bindings }>, next) => {
 });
 
 app.get('/', (c) => { return c.text('OK!') })
+app.get('/health', (c) => { 
+  return c.json({ 
+    status: 'healthy', 
+    timestamp: Date.now(),
+    version: '2.0.0'
+  }) 
+})
 
 export default app;

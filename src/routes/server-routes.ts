@@ -1,40 +1,40 @@
 import { contentJson, OpenAPIRoute } from "chanfana";
 import { z } from "zod";
+import { AppContext } from "../types";
+import { handleError, logError } from "../lib/errors";
 
-import { AppContext, SERVER_REGISTRY_DO_NAME } from "../types";
-import { handleError, logError, errorResponse } from "../lib/errors";
-import { validateServerEndpoints } from "../lib/validate";
-import { formatTimestamp } from "../lib/utils";
+// Schema for server configuration
+const ServerConfigSchema = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  endpoints: z.object({
+    predict: z.string().url(),
+    health: z.string().url(),
+    metrics: z.string().url().optional(),
+  }),
+  apiKey: z.string().optional(),
+  maxConcurrent: z.number().min(1).max(100).default(10),
+  capabilities: z.array(z.string()).optional(),
+  groups: z.array(z.string()).optional(),
+  priority: z.number().min(0).max(10).default(1),
+});
 
-/**
- * CreateServer route handler for POST /api/servers endpoint
- * Registers a new service in the registry
- */
-export class CreateServer extends OpenAPIRoute {
+export class RegisterServer extends OpenAPIRoute {
   schema = {
+    tags: ['Servers'],
+    summary: "Register a new server",
+    description: "Registers a new backend server with the system",
     request: {
-      summary: "Register a new service",
-      description: "Register a new service in the registry",
-      body: contentJson(z.object({
-        id: z.string(),
-        endpoints: z.object({
-          predict: z.string().url(),
-          health: z.string().url().optional(),
-        }),
-        provider: z.string(),
-        name: z.string(),
-        async: z.boolean().optional(),
-        callback: z.boolean().optional(),
-      })),
+      body: contentJson(ServerConfigSchema),
     },
     responses: {
       "200": {
-        description: "Successfully registered the service",
+        description: "Successfully registered server",
         content: {
           "application/json": {
             schema: z.object({
-              id: z.string(),
-              success: z.boolean(),
+              serverId: z.string(),
+              message: z.string(),
             }),
           },
         },
@@ -46,56 +46,51 @@ export class CreateServer extends OpenAPIRoute {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
       
-      // Additional validation
-      validateServerEndpoints(data.body.endpoints);
+      // Use new ServerRegistryDO with RPC
+      const registryId = c.env.SERVER_REGISTRY.idFromName("global");
+      const registry = c.env.SERVER_REGISTRY.get(registryId);
       
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      // Register server via RPC
+      const serverId = await registry.registerServer(data.body);
       
-      await serverRegistry.registerServer(data.body.id, {
-        ...data.body,
-        lastHeartbeat: formatTimestamp(),
-      });
-
       return c.json({
-        id: data.body.id,
-        success: true
+        serverId,
+        message: "Server registered successfully"
       });
     } catch (error) {
-      logError('CreateServer', error);
+      logError('RegisterServer', error);
       return handleError(error);
     }
   }
 }
 
-/**
- * ListServers route handler for GET /api/servers endpoint
- * Returns a list of all registered services
- */
 export class ListServers extends OpenAPIRoute {
   schema = {
+    tags: ['Servers'],
+    summary: "List registered servers",
+    description: "Gets list of all registered servers with optional filtering",
     request: {
-      summary: "List all registered services",
-      description: "Get a list of all services in the registry",
-      query: z.object({}),
+      query: z.object({
+        status: z.enum(["online", "offline", "maintenance", "degraded"]).optional(),
+        group: z.string().optional(),
+      }),
     },
     responses: {
       "200": {
-        description: "List of registered services",
+        description: "Successfully retrieved server list",
         content: {
           "application/json": {
             schema: z.object({
               servers: z.array(z.object({
                 id: z.string(),
                 name: z.string(),
-                provider: z.string(),
-                endpoints: z.object({
-                  predict: z.string().url(),
-                  health: z.string().url().optional(),
-                }),
-                async: z.boolean().optional(),
-                callback: z.boolean().optional(),
-                lastHeartbeat: z.string().optional(),
+                status: z.string(),
+                registeredAt: z.number(),
+                lastHeartbeat: z.number(),
+                uptime: z.number().describe("Server uptime in milliseconds"),
+                timeSinceLastHeartbeat: z.number().describe("Time since last heartbeat in milliseconds"),
+                groups: z.array(z.string()),
+                priority: z.number(),
               })),
             }),
           },
@@ -106,11 +101,14 @@ export class ListServers extends OpenAPIRoute {
 
   async handle(c: AppContext) {
     try {
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
+      const query = c.req.query();
       
-      const serversMap = await serverRegistry.getAllServers();
-      const servers = Array.from(serversMap.values());
+      // Use new ServerRegistryDO with RPC
+      const registryId = c.env.SERVER_REGISTRY.idFromName("global");
+      const registry = c.env.SERVER_REGISTRY.get(registryId);
+      
+      // Get servers via RPC with optional filter
+      const servers = await registry.getAvailableServers(query);
       
       return c.json({ servers });
     } catch (error) {
@@ -120,38 +118,24 @@ export class ListServers extends OpenAPIRoute {
   }
 }
 
-/**
- * UpdateServerHeartbeat route handler for POST /api/servers/:serverId/heartbeat endpoint
- * Updates the health status of a specific service
- */
 export class UpdateServerHeartbeat extends OpenAPIRoute {
   schema = {
+    tags: ['Servers'],
+    summary: "Update server heartbeat",
+    description: "Updates the heartbeat timestamp for a server",
     request: {
-      summary: "Update service health status",
-      description: "Send a heartbeat to update service health status",
       params: z.object({
         serverId: z.string(),
       }),
     },
     responses: {
       "200": {
-        description: "Successfully updated service health status",
+        description: "Successfully updated heartbeat",
         content: {
           "application/json": {
             schema: z.object({
-              id: z.string(),
               success: z.boolean(),
-              lastHeartbeat: z.string(),
-            }),
-          },
-        },
-      },
-      "404": {
-        description: "Service not found",
-        content: {
-          "application/json": {
-            schema: z.object({
-              error: z.string(),
+              message: z.string(),
             }),
           },
         },
@@ -162,24 +146,17 @@ export class UpdateServerHeartbeat extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-
-      const server = await serverRegistry.getServer(data.params.serverId);
       
-      if (!server) {
-        return errorResponse(`Service ${data.params.serverId} not found`, 404);
-      }
-
-      const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
-      const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
+      // Use new ServerRegistryDO with RPC
+      const registryId = c.env.SERVER_REGISTRY.idFromName("global");
+      const registry = c.env.SERVER_REGISTRY.get(registryId);
       
-      await serverInstance.getStatus();
+      // Update heartbeat via RPC
+      await registry.updateHeartbeat(data.params.serverId);
       
       return c.json({
-        id: data.params.serverId,
         success: true,
-        lastHeartbeat: server?.lastHeartbeat
+        message: "Heartbeat updated successfully"
       });
     } catch (error) {
       logError('UpdateServerHeartbeat', error);
@@ -188,163 +165,24 @@ export class UpdateServerHeartbeat extends OpenAPIRoute {
   }
 }
 
-/**
- * GetServer route handler for GET /api/servers/:serverId endpoint
- * Returns details about a specific service
- */
-export class GetServer extends OpenAPIRoute {
+export class UnregisterServer extends OpenAPIRoute {
   schema = {
+    tags: ['Servers'],
+    summary: "Unregister server",
+    description: "Removes a server from the registry",
     request: {
-      summary: "Get service details",
-      description: "Get details about a specific registered service",
       params: z.object({
         serverId: z.string(),
       }),
     },
     responses: {
       "200": {
-        description: "Service details",
-        content: {
-          "application/json": {
-            schema: z.object({
-              id: z.string(),
-              name: z.string(),
-              provider: z.string(),
-              endpoints: z.object({
-                predict: z.string(),
-                health: z.string().optional(),
-              }),
-              async: z.boolean().optional(),
-              callback: z.boolean().optional(),
-              lastHeartbeat: z.string().optional(),
-              status: z.string().optional(),
-            }),
-          },
-        },
-      },
-      "404": {
-        description: "Service not found",
-        content: {
-          "application/json": {
-            schema: z.object({
-              error: z.string(),
-            }),
-          },
-        },
-      },
-    },
-  };
-
-  async handle(c: AppContext) {
-    try {
-      const data = await this.getValidatedData<typeof this.schema>();
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-      
-      const server = await serverRegistry.getServer(data.params.serverId);
-      
-      if (!server) {
-        return errorResponse(`Service ${data.params.serverId} not found`, 404);
-      }
-
-      const serverInstanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
-      const serverInstance = c.env.SERVER_INSTANCE.get(serverInstanceId);
-
-      const serverStatus = await serverInstance.getStatus();
-      
-      return c.json({ ...server, status: serverStatus });
-    } catch (error) {
-      logError('GetServer', error);
-      return handleError(error);
-    }
-  }
-}
-
-/**
- * DeleteServer route handler for DELETE /api/servers/:serverId endpoint
- * Deregisters a service from the registry
- */
-export class DeleteServer extends OpenAPIRoute {
-  schema = {
-    request: {
-      summary: "Deregister a service",
-      description: "Remove a service from the registry",
-      params: z.object({
-        serverId: z.string(),
-      }),
-    },
-    responses: {
-      "200": {
-        description: "Successfully deregistered the service",
-        content: {
-          "application/json": {
-            schema: z.object({
-              id: z.string(),
-              success: z.boolean(),
-            }),
-          },
-        },
-      },
-      "404": {
-        description: "Service not found",
-        content: {
-          "application/json": {
-            schema: z.object({
-              error: z.string(),
-            }),
-          },
-        },
-      },
-    },
-  };
-
-  async handle(c: AppContext) {
-    try {
-      const data = await this.getValidatedData<typeof this.schema>();
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
-      
-      // Check if the server exists first
-      const server = await serverRegistry.getServer(data.params.serverId);
-      
-      if (!server) {
-        return errorResponse(`Service ${data.params.serverId} not found`, 404);
-      }
-      
-      await serverRegistry.removeServer(data.params.serverId);
-      
-      return c.json({
-        id: data.params.serverId,
-        success: true
-      });
-    } catch (error) {
-      logError('DeleteServer', error);
-      return handleError(error);
-    }
-  }
-}
-
-/**
- * CleanupStaleServers route handler for POST /api/servers/cleanup endpoint
- * Removes servers that haven't sent a heartbeat in the specified time
- */
-export class CleanupStaleServers extends OpenAPIRoute {
-  schema = {
-    request: {
-      summary: "Clean up stale servers",
-      description: "Remove servers that haven't sent a heartbeat in the specified time",
-      body: contentJson(z.object({
-        maxAgeMins: z.number().positive().optional(),
-      }).optional()),
-    },
-    responses: {
-      "200": {
-        description: "Successfully cleaned up stale servers",
+        description: "Successfully unregistered server",
         content: {
           "application/json": {
             schema: z.object({
               success: z.boolean(),
-              removedServers: z.array(z.string()),
+              message: z.string(),
             }),
           },
         },
@@ -355,19 +193,121 @@ export class CleanupStaleServers extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      const serverRegistryId = c.env.SERVER_REGISTRY.idFromName(SERVER_REGISTRY_DO_NAME);
-      const serverRegistry = c.env.SERVER_REGISTRY.get(serverRegistryId);
       
-      // Use the provided maxAgeMins or default to the function's default value
-      const maxAgeMins = data.body?.maxAgeMins;
-      const removedServers = await serverRegistry.cleanupStaleServers(maxAgeMins);
+      // Use new ServerRegistryDO with RPC
+      const registryId = c.env.SERVER_REGISTRY.idFromName("global");
+      const registry = c.env.SERVER_REGISTRY.get(registryId);
+      
+      // Unregister server via RPC
+      await registry.unregisterServer(data.params.serverId);
       
       return c.json({
         success: true,
-        removedServers,
+        message: "Server unregistered successfully"
       });
     } catch (error) {
-      logError('CleanupStaleServers', error);
+      logError('UnregisterServer', error);
+      return handleError(error);
+    }
+  }
+}
+
+export class SetServerMaintenance extends OpenAPIRoute {
+  schema = {
+    tags: ['Servers'],
+    summary: "Set server maintenance mode",
+    description: "Enables or disables maintenance mode for a server",
+    request: {
+      params: z.object({
+        serverId: z.string(),
+      }),
+      body: contentJson(z.object({
+        enabled: z.boolean(),
+      })),
+    },
+    responses: {
+      "200": {
+        description: "Successfully updated maintenance mode",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+    },
+  };
+
+  async handle(c: AppContext) {
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      
+      // Use new ServerInstanceDO with RPC
+      const instanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
+      const instance = c.env.SERVER_INSTANCE.get(instanceId);
+      
+      // Set maintenance mode via RPC
+      await instance.setMaintenanceMode(data.body.enabled);
+      
+      return c.json({
+        success: true,
+        message: `Maintenance mode ${data.body.enabled ? 'enabled' : 'disabled'} for server ${data.params.serverId}`
+      });
+    } catch (error) {
+      logError('SetServerMaintenance', error);
+      return handleError(error);
+    }
+  }
+}
+
+export class GetServerMetrics extends OpenAPIRoute {
+  schema = {
+    tags: ['Servers'],
+    summary: "Get server metrics",
+    description: "Gets performance metrics for a specific server",
+    request: {
+      params: z.object({
+        serverId: z.string(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "Successfully retrieved server metrics",
+        content: {
+          "application/json": {
+            schema: z.object({
+              tasksProcessed: z.number(),
+              successCount: z.number(),
+              failureCount: z.number(),
+              successRate: z.number(),
+              averageResponseTime: z.number(),
+              healthScore: z.number(),
+              activeTasks: z.number(),
+              status: z.string(),
+              healthy: z.boolean(),
+            }),
+          },
+        },
+      },
+    },
+  };
+
+  async handle(c: AppContext) {
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      
+      // Use new ServerInstanceDO with RPC
+      const instanceId = c.env.SERVER_INSTANCE.idFromName(data.params.serverId);
+      const instance = c.env.SERVER_INSTANCE.get(instanceId);
+      
+      // Get metrics via RPC
+      const metrics = await instance.getMetrics();
+      
+      return c.json(metrics);
+    } catch (error) {
+      logError('GetServerMetrics', error);
       return handleError(error);
     }
   }

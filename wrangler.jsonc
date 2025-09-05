@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "cf-worker-vu",
 	"main": "src/index.ts",
-	"compatibility_date": "2025-03-17",
+	"compatibility_date": "2024-04-03",
 	"observability": {
 		"enabled": true
 	},
@@ -24,16 +24,24 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"name": "SERVER_REGISTRY",
-				"class_name": "ServerRegistry"
+				"name": "TASK_INSTANCE",
+				"class_name": "TaskInstanceDO"
 			},
 			{
-				"name": "TASK_MANAGER",
-				"class_name": "TaskManager"
+				"name": "LOAD_BALANCER",
+				"class_name": "LoadBalancerDO"
 			},
 			{
 				"name": "SERVER_INSTANCE",
-				"class_name": "ServerInstance"
+				"class_name": "ServerInstanceDO"
+			},
+			{
+				"name": "SERVER_REGISTRY",
+				"class_name": "ServerRegistryDO"
+			},
+			{
+				"name": "TASK_STATS",
+				"class_name": "TaskInstanceStatsDO"
 			}
 		]
 	},
@@ -41,9 +49,11 @@
 		{
 			"tag": "v1",
 			"new_classes": [
-				"ServerRegistry",
-				"TaskManager",
-				"ServerInstance"
+				"TaskInstanceDO",
+				"LoadBalancerDO",
+				"ServerInstanceDO",
+				"ServerRegistryDO",
+				"TaskInstanceStatsDO"
 			]
 		}
 	],
@@ -59,7 +69,11 @@
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 */
-	"vars": {},
+	"vars": {
+		"WORKER_URL": "http://localhost:8787",
+		"SERVER_STALE_THRESHOLD": 30000,
+		"SERVER_CLEANUP_INTERVAL": 30000
+	},
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/

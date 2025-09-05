@@ -1,8 +1,11 @@
 import { fromHono, RouterOptions } from 'chanfana'
 
 import app from './app';
-import { CreateTask, GetTask, UpdateTask } from './routes/task-routes';
-import { CreateServer, ListServers, UpdateServerHeartbeat, GetServer, DeleteServer, CleanupStaleServers } from './routes/server-routes';
+
+// RPC-based routes
+import { CreateTask, GetTask, UpdateTask, RetryTask, CancelTask } from './routes/task-routes';
+import { RegisterServer, ListServers, UpdateServerHeartbeat, UnregisterServer, SetServerMaintenance, GetServerMetrics } from './routes/server-routes';
+import { GetTaskStats, GetHourlyReport, GetServerStats, GetLoadBalancerStatus, SetLoadBalancerAlgorithm } from './routes/stats-routes';
 
 const ChanfanaOptions = {
 	docs_url: '/docs',
@@ -26,20 +29,33 @@ openapi.registry.registerComponent('securitySchemes', 'BearerAuth', {
 	bearerFormat: 'JWT',
 });
 
+// Task management
 openapi.post('/api/task', CreateTask)
 openapi.get('/api/task/:id', GetTask)
 openapi.put('/api/task/:id', UpdateTask)
+openapi.post('/api/task/:id/retry', RetryTask)
+openapi.delete('/api/task/:id', CancelTask)
 
-// New server registry API endpoints
-openapi.post('/api/servers', CreateServer)
+// Server management
+openapi.post('/api/servers', RegisterServer)
 openapi.get('/api/servers', ListServers)
 openapi.post('/api/servers/:serverId/heartbeat', UpdateServerHeartbeat)
-openapi.get('/api/servers/:serverId', GetServer)
-openapi.delete('/api/servers/:serverId', DeleteServer)
-openapi.post('/api/servers/cleanup', CleanupStaleServers)
+openapi.delete('/api/servers/:serverId', UnregisterServer)
+openapi.put('/api/servers/:serverId/maintenance', SetServerMaintenance)
+openapi.get('/api/servers/:serverId/metrics', GetServerMetrics)
 
-export { TaskManager } from './durable-objects/task-manager'
-export { ServerInstance } from './durable-objects/server-instance'
-export { ServerRegistry } from './durable-objects/server-registry'
+// Statistics and monitoring
+openapi.get('/api/stats', GetTaskStats)
+openapi.get('/api/stats/hourly', GetHourlyReport)
+openapi.get('/api/stats/server/:serverId', GetServerStats)
+openapi.get('/api/loadbalancer/status', GetLoadBalancerStatus)
+openapi.put('/api/loadbalancer/algorithm', SetLoadBalancerAlgorithm)
+
+// Export RPC-based Durable Objects
+export { TaskInstanceDO } from './durable-objects/TaskInstanceDO'
+export { LoadBalancerDO } from './durable-objects/LoadBalancerDO'
+export { ServerInstanceDO } from './durable-objects/ServerInstanceDO'
+export { ServerRegistryDO } from './durable-objects/ServerRegistryDO'
+export { TaskInstanceStatsDO } from './durable-objects/TaskInstanceStatsDO'
 
 export default app

@@ -1,23 +1,31 @@
 import { contentJson, OpenAPIRoute } from "chanfana";
 import { z } from "zod";
-import { nanoid } from "nanoid";
-
-import { AppContext, Task, TaskRequest, TaskStatus } from "../types";
+import { AppContext } from "../types";
 import { handleError, logError } from "../lib/errors";
 import { generateId } from "../lib/utils";
 
+// Schema for new task creation matching the RPC architecture
+const TaskRequestSchema = z.object({
+  type: z.string().default('video-processing'),
+  priority: z.number().default(0),
+  payload: z.object({
+    mimeType: z.string(),
+    model: z.string(),
+    video_quality: z.string(),
+    video_url: z.string(),
+    enable_upscale: z.boolean(),
+  }),
+  capabilities: z.array(z.string()).optional(),
+  async: z.boolean().default(true)
+});
+
 export class CreateTask extends OpenAPIRoute {
   schema = {
+    tags: ['Tasks'],
     summary: "Create a new task",
-    description: "Creates a new task with the provided URL",
+    description: "Creates a new task using RPC-based Durable Objects",
     request: {
-      body: contentJson(z.object({
-        mimeType: z.string(),
-        model: z.string(),
-        video_quality: z.string(),
-        video_url: z.string(),
-        enable_upscale: z.boolean(),
-      })),
+      body: contentJson(TaskRequestSchema),
     },
     responses: {
       "200": {
@@ -25,8 +33,10 @@ export class CreateTask extends OpenAPIRoute {
         content: {
           "application/json": {
             schema: z.object({
-              taskId: z.string(),
-              taskDetails: z.any(),
+              id: z.string(),
+              status: z.string(),
+              createdAt: z.number(),
+              updatedAt: z.number(),
             }),
           },
         },
@@ -38,27 +48,27 @@ export class CreateTask extends OpenAPIRoute {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
       const taskId = generateId('task');
-      const taskManagerId = c.env.TASK_MANAGER.idFromName(taskId);
-      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
-
-      const url = new URL(c.req.url);
-      const callbackUrl = `${url.protocol}//${url.host}/api/task/${taskId}`;
-
-      const newTask: Task = {
-        id: taskId,
-        status: TaskStatus.WAITING,
-        request: data.body as TaskRequest,
-        serverId: "",
-        result: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        callbackUrl,
-      };
       
-      const taskDetails = await taskManager.createTask(newTask);
+      // Use new TaskInstanceDO with RPC
+      const taskInstanceId = c.env.TASK_INSTANCE.idFromName(taskId);
+      const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
+      
+      // Create task via RPC
+      const task = await taskInstance.createTask(data.body, taskId);
+      
+      // Record task start in statistics
+      const statsId = c.env.TASK_STATS.idFromName(new Date().toISOString().slice(0, 10));
+      const stats = c.env.TASK_STATS.get(statsId);
+      await stats.recordTaskStart({ 
+        taskId: task.id,
+        serverId: task.serverId 
+      });
+      
       return c.json({
-        taskId,
-        taskDetails
+        id: task.id,
+        status: task.status,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt
       });
     } catch (error) {
       logError('CreateTask', error);
@@ -69,8 +79,9 @@ export class CreateTask extends OpenAPIRoute {
 
 export class GetTask extends OpenAPIRoute {
   schema = {
-    summary: "Retrieve task details",
-    description: "Gets the current status and details of a task by ID",
+    tags: ['Tasks'],
+    summary: "Get task status",
+    description: "Gets the current status of a task using RPC",
     request: {
       params: z.object({
         id: z.string(),
@@ -78,12 +89,18 @@ export class GetTask extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Successfully retrieved task details",
+        description: "Successfully retrieved task status",
         content: {
           "application/json": {
             schema: z.object({
-              taskId: z.string(),
-              taskDetails: z.any(),
+              id: z.string(),
+              status: z.string(),
+              progress: z.number().optional(),
+              result: z.any().optional(),
+              error: z.string().optional(),
+              createdAt: z.number(),
+              updatedAt: z.number(),
+              attempts: z.number(),
             }),
           },
         },
@@ -94,18 +111,15 @@ export class GetTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
-      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
-      const taskDetails = await taskManager.getTask();
-
-      if (!taskDetails) {
-        throw new Error(`Task ${data.params.id} not found`);
-      }
-
-      return c.json({
-        taskId: data.params.id,
-        taskDetails
-      });
+      
+      // Use new TaskInstanceDO with RPC
+      const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
+      const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
+      
+      // Get status via RPC
+      const status = await taskInstance.getStatus();
+      
+      return c.json(status);
     } catch (error) {
       logError('GetTask', error);
       return handleError(error);
@@ -115,25 +129,18 @@ export class GetTask extends OpenAPIRoute {
 
 export class UpdateTask extends OpenAPIRoute {
   schema = {
-    summary: "Update task details",
-    description: "Updates an existing task with new information",
+    tags: ['Tasks'],
+    summary: "Update task",
+    description: "Updates a task (typically called by backend callback)",
     request: {
       params: z.object({
         id: z.string(),
       }),
       body: contentJson(z.object({
-        backend_task_id: z.string(),
-        data: z.record(z.string(), z.any()),
-        metadata: z.object({
-          server_id: z.string(),
-          processing_time: z.number().optional(),
-          model_time: z.number().optional(),
-          queue_time: z.number().optional(),
-          progress: z.number().optional(),
-          status: z.enum([TaskStatus.WAITING, TaskStatus.PROCESSING, TaskStatus.FINISHED, TaskStatus.FAILED]),
-          message: z.string().optional().nullable(),
-          custom_data: z.any().optional()
-        })
+        status: z.enum(["PENDING", "PROCESSING", "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED"]),
+        result: z.any().optional(),
+        progress: z.number().optional(),
+        error: z.string().optional(),
       })),
     },
     responses: {
@@ -142,8 +149,9 @@ export class UpdateTask extends OpenAPIRoute {
         content: {
           "application/json": {
             schema: z.object({
-              taskId: z.string(),
-              taskDetails: z.any(),
+              id: z.string(),
+              status: z.string(),
+              updatedAt: z.number(),
             }),
           },
         },
@@ -154,18 +162,115 @@ export class UpdateTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      const taskManagerId = c.env.TASK_MANAGER.idFromName(data.params.id);
-      const taskManager = c.env.TASK_MANAGER.get(taskManagerId);
       
-      const taskUpdate = data.body;
-      const updatedTaskDetails = await taskManager.updateTask({...taskUpdate, task_id: data.params.id});
-
+      // Use new TaskInstanceDO with RPC
+      const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
+      const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
+      
+      // Update task via RPC
+      const task = await taskInstance.updateTask(data.body);
+      
       return c.json({
-        taskId: data.params.id,
-        taskDetails: updatedTaskDetails
+        id: task.id,
+        status: task.status,
+        updatedAt: task.updatedAt
       });
     } catch (error) {
       logError('UpdateTask', error);
+      return handleError(error);
+    }
+  }
+}
+
+export class RetryTask extends OpenAPIRoute {
+  schema = {
+    tags: ['Tasks'],
+    summary: "Retry failed task",
+    description: "Retries a failed or timed out task",
+    request: {
+      params: z.object({
+        id: z.string(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "Successfully initiated retry",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+    },
+  };
+
+  async handle(c: AppContext) {
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      
+      // Use new TaskInstanceDO with RPC
+      const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
+      const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
+      
+      // Retry via RPC
+      const success = await taskInstance.retry();
+      
+      return c.json({
+        success,
+        message: success ? "Task retry initiated" : "Task cannot be retried"
+      });
+    } catch (error) {
+      logError('RetryTask', error);
+      return handleError(error);
+    }
+  }
+}
+
+export class CancelTask extends OpenAPIRoute {
+  schema = {
+    tags: ['Tasks'],
+    summary: "Cancel task",
+    description: "Cancels a pending or processing task",
+    request: {
+      params: z.object({
+        id: z.string(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "Successfully cancelled task",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+    },
+  };
+
+  async handle(c: AppContext) {
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      
+      // Use new TaskInstanceDO with RPC
+      const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
+      const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
+      
+      // Cancel via RPC
+      await taskInstance.cancel();
+      
+      return c.json({
+        success: true,
+        message: "Task cancelled successfully"
+      });
+    } catch (error) {
+      logError('CancelTask', error);
       return handleError(error);
     }
   }

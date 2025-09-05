@@ -10,7 +10,21 @@
       "Bash(npm run test:e2e:*)",
       "Bash(npm test)",
       "Bash(node:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install:*)",
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(kill:*)",
+      "Bash(# Test getting server list\ncurl -X GET \"\"http://localhost:8787/api/servers\"\" \\\n  -H \"\"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc1Njk3NTQxNywiZXhwIjoxNzU2OTc5MDE3fQ.NA2lByjYH1L-u72lNVM498iGR2gvUn7nfHHDllRCXdc\"\" | jq .)",
+      "Bash(# Create a task  \ncurl -X POST \"\"http://localhost:8787/api/tasks\"\" \\\n  -H \"\"Content-Type: application/json\"\" \\\n  -H \"\"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc1Njk3NTQxNywiZXhwIjoxNzU2OTc5MDE3fQ.NA2lByjYH1L-u72lNVM498iGR2gvUn7nfHHDllRCXdc\"\" \\\n  -d ''{\n    \"\"type\"\": \"\"text_generation\"\",\n    \"\"input\"\": \"\"Hello World\"\",\n    \"\"priority\"\": 1\n  }'' | jq .)",
+      "Bash(# Create a task  \ncurl -X POST \"\"http://localhost:8787/api/task\"\" \\\n  -H \"\"Content-Type: application/json\"\" \\\n  -H \"\"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc1Njk3NTQxNywiZXhwIjoxNzU2OTc5MDE3fQ.NA2lByjYH1L-u72lNVM498iGR2gvUn7nfHHDllRCXdc\"\" \\\n  -d ''{\n    \"\"type\"\": \"\"text_generation\"\",\n    \"\"input\"\": \"\"Hello World\"\",\n    \"\"priority\"\": 1\n  }'' | jq .)",
+      "Bash(# Create a task with correct schema\ncurl -X POST \"\"http://localhost:8787/api/task\"\" \\\n  -H \"\"Content-Type: application/json\"\" \\\n  -H \"\"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGVzIjpbImFkbWluIl0sImlhdCI6MTc1Njk3NTQxNywiZXhwIjoxNzU2OTc5MDE3fQ.NA2lByjYH1L-u72lNVM498iGR2gvUn7nfHHDllRCXdc\"\" \\\n  -d ''{\n    \"\"type\"\": \"\"video-processing\"\",\n    \"\"priority\"\": 1,\n    \"\"payload\"\": {\n      \"\"mimeType\"\": \"\"video/mp4\"\",\n      \"\"model\"\": \"\"standard\"\",\n      \"\"video_quality\"\": \"\"1080p\"\",\n      \"\"video_url\"\": \"\"https://example.com/video.mp4\"\",\n      \"\"enable_upscale\"\": false\n    },\n    \"\"capabilities\"\": [\"\"video\"\"],\n    \"\"async\"\": true\n  }'' | jq .)"
     ],
     "deny": []
   }

@@ -1,6 +1,8 @@
 import { Context } from "hono";
 
-export type Bindings = Pick<Cloudflare.Env, keyof Cloudflare.Env>;
+// Define the environment bindings {}
+export interface Bindings extends Cloudflare.Env {}
+
 export type AppContext = Context<{ Bindings: Bindings }>;
 
 // 改这里
