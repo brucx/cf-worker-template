@@ -8,9 +8,9 @@ const ServerConfigSchema = z.object({
   id: z.string().optional(),
   name: z.string(),
   endpoints: z.object({
-    predict: z.string().url(),
-    health: z.string().url(),
-    metrics: z.string().url().optional(),
+    predict: z.string().url().default("http://localhost:8080/predict"),
+    health: z.string().url().default("http://localhost:8080/health"),
+    metrics: z.string().url().optional().default("http://localhost:8080/metrics"),
   }),
   apiKey: z.string().optional(),
   maxConcurrent: z.number().min(1).max(100).default(10),
