@@ -49,7 +49,7 @@ export class TaskInstanceDO extends DurableObject implements ITaskInstance {
 
     // Use provided taskId or extract from DO name
     const id = taskId || this.state.id.name || this.state.id.toString();
-    console.log(`[TaskInstanceDO] Creating new task ${id} with type: ${request.type}`);
+    console.log(`[TaskInstanceDO] Creating new task ${id} with type: ${request.type}, async: ${request.async}`);
 
     this.task = {
       id,
@@ -73,6 +73,13 @@ export class TaskInstanceDO extends DurableObject implements ITaskInstance {
     // Assign server and start execution
     try {
       await this.assignAndExecute();
+      
+      // For synchronous tasks, wait for completion
+      if (!request.async) {
+        console.log(`[TaskInstanceDO] Waiting for synchronous task ${this.task.id} to complete`);
+        const result = await this.waitForCompletion();
+        return result;
+      }
     } catch (error: any) {
       console.error(`[TaskInstanceDO] Task ${this.task.id} initial assignment failed:`, error);
       this.task.status = "FAILED";
@@ -313,5 +320,32 @@ export class TaskInstanceDO extends DurableObject implements ITaskInstance {
 
   private isRetryableStatus(status: TaskStatus): boolean {
     return ["FAILED", "TIMEOUT"].includes(status);
+  }
+
+  // Wait for synchronous task completion
+  private async waitForCompletion(): Promise<Task> {
+    const maxWaitTime = 30000; // 30 seconds max wait
+    const checkInterval = 100; // Check every 100ms
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      // Reload task from storage to get latest status
+      this.task = await this.state.storage.get("task") || this.task;
+      
+      if (this.isTaskComplete(this.task!.status)) {
+        console.log(`[TaskInstanceDO] Synchronous task ${this.task!.id} completed with status: ${this.task!.status}`);
+        return this.task!;
+      }
+      
+      // Wait before checking again
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    // Timeout waiting for completion
+    console.error(`[TaskInstanceDO] Synchronous task ${this.task!.id} timed out waiting for completion`);
+    this.task!.status = "TIMEOUT";
+    this.task!.error = "Synchronous task timeout";
+    await this.state.storage.put("task", this.task);
+    return this.task!;
   }
 }

@@ -342,8 +342,17 @@ export class ServerInstanceDO extends DurableObject implements IServerInstance {
   }
 
   private async sendTaskResult(taskId: string, result: any): Promise<void> {
-    // This would typically update the task via callback
-    console.log(`Task ${taskId} completed with result:`, result);
+    console.log(`[ServerInstance] Sending result for task ${taskId}`);
+    
+    // Update task directly via TaskInstanceDO
+    const taskInstanceId = this.env.TASK_INSTANCE.idFromName(taskId);
+    const taskInstance = this.env.TASK_INSTANCE.get(taskInstanceId);
+    
+    await taskInstance.updateTask({
+      status: "COMPLETED",
+      result: result,
+      progress: 100
+    });
   }
 
   private updateMetrics(success: boolean, duration: number): void {

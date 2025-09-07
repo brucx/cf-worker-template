@@ -17,7 +17,7 @@ export class CreateTask extends OpenAPIRoute {
   schema = {
     tags: ['Tasks'],
     summary: "Create a new task",
-    description: "Creates a new task using RPC-based Durable Objects",
+    description: "Creates a new task using RPC-based Durable Objects. For synchronous tasks (async: false), returns the result immediately.",
     request: {
       body: contentJson(TaskRequestSchema),
     },
@@ -29,6 +29,8 @@ export class CreateTask extends OpenAPIRoute {
             schema: z.object({
               id: z.string(),
               status: z.string(),
+              result: z.any().optional(),
+              error: z.string().optional(),
               createdAt: z.number(),
               updatedAt: z.number(),
             }),
@@ -48,7 +50,7 @@ export class CreateTask extends OpenAPIRoute {
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
       
       // Create task via RPC
-      const task = await taskInstance.createTask(data.body, taskId);
+      const task = await taskInstance.createTask(data.body, taskId) as any;
       
       // Record task start in statistics
       const statsId = c.env.TASK_STATS.idFromName(new Date().toISOString().slice(0, 10));
@@ -58,12 +60,27 @@ export class CreateTask extends OpenAPIRoute {
         serverId: task.serverId 
       });
       
-      return c.json({
+      // For synchronous tasks, return the result
+      if (!data.body.async && task.status === "COMPLETED") {
+        const response = {
+          id: task.id,
+          status: task.status,
+          result: task.result,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt
+        };
+        return c.json(response);
+      }
+      
+      // For async tasks or errors, return status
+      const response: any = {
         id: task.id,
         status: task.status,
+        error: task.error,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt
-      });
+      };
+      return c.json(response);
     } catch (error) {
       logError('CreateTask', error);
       return handleError(error);
