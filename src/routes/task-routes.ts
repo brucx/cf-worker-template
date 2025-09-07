@@ -8,13 +8,7 @@ import { generateId } from "../lib/utils";
 const TaskRequestSchema = z.object({
   type: z.string().default('video-processing'),
   priority: z.number().default(0),
-  payload: z.object({
-    mimeType: z.string(),
-    model: z.string(),
-    video_quality: z.string(),
-    video_url: z.string(),
-    enable_upscale: z.boolean(),
-  }),
+  payload: z.record(z.unknown()),
   capabilities: z.array(z.string()).optional(),
   async: z.boolean().default(true)
 });

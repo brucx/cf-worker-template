@@ -1,3 +1,10 @@
+import { Context } from "hono";
+
+// Define the environment bindings {}
+export interface Bindings extends Cloudflare.Env {}
+
+export type AppContext = Context<{ Bindings: Bindings }>;
+
 export type Env = Cloudflare.Env
 
 // Task-related types

@@ -1,508 +1,671 @@
-# Deployment Guide
+# 🚀 Cloudflare Worker 任务调度系统部署教程
 
-This guide covers deploying the Cloudflare Workers Task Processing System to production.
+本教程将手把手教你如何使用这个模板部署一个属于自己的分布式任务调度系统。即使你是新手，只要按照步骤操作，也能在 30 分钟内完成部署！
 
-## Prerequisites
+## 📋 目录
 
-- Cloudflare account with Workers plan
-- Wrangler CLI installed and authenticated
-- D1 database access
-- Durable Objects enabled on your account
+1. [系统简介](#系统简介)
+2. [准备工作](#准备工作)
+3. [快速部署](#快速部署)
+4. [自定义配置](#自定义配置)
+5. [常见应用场景](#常见应用场景)
+6. [测试验证](#测试验证)
+7. [常见问题](#常见问题)
 
-## Environment Setup
+## 🎯 系统简介
 
-### 1. Clone and Install
+### 这个系统能做什么？
+
+这是一个基于 Cloudflare Workers 的**分布式任务调度系统**，可以：
+
+- 🔄 **自动分发任务**：将任务智能分配给多个后端服务器
+- 💪 **负载均衡**：确保每个服务器的负载均匀
+- 🏥 **健康检查**：自动监控服务器状态，剔除故障服务器
+- 📊 **任务统计**：实时统计任务执行情况
+- 🔁 **失败重试**：任务失败后自动重试
+
+### 适用场景
+
+- **AI 模型推理服务**：管理多个 GPU 服务器，分发推理任务
+- **视频处理集群**：分发视频转码、剪辑任务
+- **数据处理管道**：批量数据处理任务调度
+- **Web 爬虫系统**：分发爬虫任务到多个节点
+- **任何需要任务调度的场景**
+
+## 🛠 准备工作
+
+### 1. 注册 Cloudflare 账号
+
+1. 访问 [Cloudflare 注册页面](https://dash.cloudflare.com/sign-up)
+2. 创建免费账号
+3. 验证邮箱
+
+### 2. 安装必要工具
+
+打开终端（Mac/Linux）或命令提示符（Windows），执行以下命令：
 
 ```bash
-git clone <repository-url>
+# 安装 Node.js (如果还没安装)
+# 访问 https://nodejs.org/ 下载并安装 LTS 版本
+
+# 验证安装
+node --version  # 应该显示 v18.0.0 或更高版本
+
+# 安装 Wrangler (Cloudflare 的命令行工具)
+npm install -g wrangler
+
+# 登录 Cloudflare
+wrangler login
+```
+
+### 3. 下载项目代码
+
+```bash
+# 克隆项目（需要先安装 Git）
+git clone https://github.com/your-username/cf-worker-template.git
+
+# 或者直接下载 ZIP 文件并解压
+
+# 进入项目目录
 cd cf-worker-template
+
+# 安装依赖
 npm install
 ```
 
-### 2. Configure Wrangler
+## 🚀 快速部署
 
-Ensure your `wrangler.jsonc` is properly configured:
+### 第 1 步：配置项目名称
+
+编辑 `wrangler.jsonc` 文件：
 
 ```jsonc
 {
-  "name": "task-processor",
-  "main": "src/index.ts",
-  "compatibility_date": "2024-01-06",
-  
-  "vars": {
-    "JWT_SECRET": "your-production-secret-here"
-  },
-  
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "SERVER_REGISTRY",
-        "class_name": "ServerRegistryDO"
-      },
-      {
-        "name": "SERVER_INSTANCE", 
-        "class_name": "ServerInstanceDO"
-      },
-      {
-        "name": "TASK_INSTANCE",
-        "class_name": "TaskInstanceDO"
-      },
-      {
-        "name": "LOAD_BALANCER",
-        "class_name": "LoadBalancerDO"
-      },
-      {
-        "name": "TASK_STATS",
-        "class_name": "TaskInstanceStatsDO"
-      }
-    ]
-  },
-  
-  "d1_databases": [
-    {
-      "binding": "TASK_DATABASE",
-      "database_name": "task-database",
-      "database_id": "your-database-id"
-    }
-  ]
+  "name": "my-task-scheduler",  // 改成你的项目名称
+  // ... 其他配置
 }
 ```
 
-## Database Setup
-
-### 1. Create D1 Database
+### 第 2 步：创建数据库
 
 ```bash
-# Create production database
-wrangler d1 create task-database
+# 创建 D1 数据库
+wrangler d1 create my-tasks-db
 
-# Note the database_id from the output
+# 命令会输出类似这样的信息：
+# database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### 2. Update Configuration
-
-Add the database ID to your `wrangler.jsonc`:
+把输出的 `database_id` 复制到 `wrangler.jsonc`：
 
 ```jsonc
 "d1_databases": [
   {
     "binding": "TASK_DATABASE",
-    "database_name": "task-database",
-    "database_id": "xxxxx-xxxxx-xxxxx-xxxxx"
+    "database_name": "my-tasks-db",
+    "database_id": "粘贴你的 database_id",  // <-- 这里
+    "migrations_dir": "src/migrations"
   }
 ]
 ```
 
-### 3. Apply Migrations
+### 第 3 步：设置环境变量
 
-```bash
-# Apply to production
-wrangler d1 migrations apply TASK_DATABASE
+创建 `.dev.vars` 文件（本地开发用）：
 
-# Verify migrations
-wrangler d1 execute TASK_DATABASE --command="SELECT * FROM _cf_KV"
+```env
+JWT_SECRET=your-super-secret-key-change-this
 ```
 
-## Security Configuration
-
-### 1. Generate Production JWT Secret
+设置生产环境密钥：
 
 ```bash
-# Generate a secure secret
-openssl rand -base64 32
-
-# Or use Node.js
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-```
-
-### 2. Set Production Secrets
-
-```bash
-# Set JWT secret
 wrangler secret put JWT_SECRET
-
-# Set other secrets if needed
-wrangler secret put API_KEY
+# 输入一个安全的密钥（至少 32 个字符）
 ```
 
-### 3. Configure CORS
-
-Update `src/app.ts` with your production domains:
-
-```typescript
-const CORS_ORIGINS = [
-  'https://your-app.com',
-  'https://www.your-app.com',
-  'https://admin.your-app.com'
-];
-```
-
-## Deployment Steps
-
-### 1. Build and Test
+### 第 4 步：初始化数据库
 
 ```bash
-# Run tests
-npm run test:e2e
+# 本地测试
+npx wrangler d1 migrations apply TASK_DATABASE --local
 
-# Type checking
-npm run cf-typegen
-
-# Build check
-wrangler deploy --dry-run
+# 生产环境
+npx wrangler d1 migrations apply TASK_DATABASE --remote
 ```
 
-### 2. Deploy to Staging
+### 第 5 步：部署到 Cloudflare
 
 ```bash
-# Deploy to staging environment
-wrangler deploy --env staging
-
-# Test staging deployment
-curl https://task-processor-staging.<your-subdomain>.workers.dev/docs
-```
-
-### 3. Deploy to Production
-
-```bash
-# Deploy to production
-wrangler deploy --env production
-
-# Or simply
+# 部署到生产环境
 npm run deploy
+
+# 部署成功后会显示你的 Worker URL:
+# https://my-task-scheduler.your-subdomain.workers.dev
 ```
 
-### 4. Verify Deployment
+🎉 **恭喜！你的任务调度系统已经部署成功了！**
 
-```bash
-# Check deployment status
-wrangler deployments list
+## ⚙️ 自定义配置
 
-# Test health endpoint
-curl https://task-processor.<your-subdomain>.workers.dev/health
+### 1. 调整服务器超时设置
 
-# Generate admin token
-node generate-jwt.js
-
-# Test API
-curl https://task-processor.<your-subdomain>.workers.dev/api/servers \
-  -H "Authorization: Bearer <token>"
-```
-
-## Environment-Specific Configuration
-
-### Development
+编辑 `wrangler.jsonc`：
 
 ```jsonc
-{
-  "vars": {
-    "JWT_SECRET": "dev-secret",
-    "ENVIRONMENT": "development"
-  }
+"vars": {
+  "SERVER_STALE_THRESHOLD": 300000,  // 5分钟无心跳视为离线
+  "SERVER_CLEANUP_INTERVAL": 60000   // 每分钟清理一次
 }
 ```
 
-### Staging
+### 2. 修改任务重试次数
 
-```jsonc
+编辑 `src/durable-objects/TaskInstanceDO.ts`：
+
+```typescript
+private readonly MAX_RETRIES = 3;  // 最大重试次数
+private readonly TASK_TIMEOUT = 3600000;  // 任务超时时间（1小时）
+```
+
+### 3. 自定义负载均衡算法
+
+系统支持多种算法：
+
+- `weighted-round-robin`：加权轮询（默认）
+- `least-connections`：最少连接
+- `response-time`：响应时间最短
+- `random`：随机
+
+通过 API 切换：
+
+```bash
+curl -X PUT https://your-worker.workers.dev/api/loadbalancer/algorithm \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{"algorithm": "least-connections"}'
+```
+
+## 🔄 自定义 Payload 格式
+
+系统的 payload 是完全灵活的，可以根据你的后端服务需求自由定义。以下是不同类型推理服务的 payload 示例：
+
+### 通用 Payload 结构
+
+```javascript
 {
-  "env": {
-    "staging": {
-      "vars": {
-        "ENVIRONMENT": "staging"
-      },
-      "routes": [
-        "staging.your-domain.com/*"
-      ]
+  type: "任务类型",           // 必填：用于标识任务类型
+  priority: 1,                // 可选：优先级（0-10，数字越大优先级越高）
+  payload: {                   // 必填：实际传递给后端的数据
+    // 你的自定义字段
+  },
+  capabilities: ["能力1"],     // 必填：后端服务需要具备的能力
+  async: true                  // 可选：是否异步执行
+}
+```
+
+### 不同推理服务的 Payload 示例
+
+#### 1. OpenAI 兼容 API（ChatGPT、文心一言等）
+
+```javascript
+const llmTask = {
+  type: "chat-completion",
+  payload: {
+    model: "gpt-3.5-turbo",
+    messages: [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Hello!"}
+    ],
+    temperature: 0.7,
+    max_tokens: 1000,
+    stream: false
+  },
+  capabilities: ["llm", "chat"],
+  async: true
+};
+```
+
+#### 2. Stable Diffusion（图像生成）
+
+```javascript
+const sdTask = {
+  type: "txt2img",
+  payload: {
+    prompt: "masterpiece, best quality, 1girl, sunset",
+    negative_prompt: "low quality, blurry",
+    width: 512,
+    height: 768,
+    cfg_scale: 7,
+    steps: 20,
+    sampler: "DPM++ 2M Karras",
+    seed: -1,
+    model: "animagine-xl-3.1"
+  },
+  capabilities: ["stable-diffusion", "txt2img"],
+  async: true
+};
+```
+
+#### 3. Whisper（语音识别）
+
+```javascript
+const whisperTask = {
+  type: "speech-to-text",
+  payload: {
+    audio_url: "https://example.com/audio.mp3",
+    // 或者 base64 编码的音频
+    audio_base64: "data:audio/mp3;base64,//...",
+    language: "zh",
+    task: "transcribe",  // transcribe 或 translate
+    model: "whisper-large-v3"
+  },
+  capabilities: ["whisper", "speech-recognition"],
+  async: true
+};
+```
+
+#### 4. BERT/Transformers（文本分类）
+
+```javascript
+const bertTask = {
+  type: "text-classification",
+  payload: {
+    text: "这个产品质量很好，物流也很快",
+    model: "bert-base-chinese",
+    labels: ["positive", "negative", "neutral"],
+    multi_label: false
+  },
+  capabilities: ["bert", "text-classification"],
+  async: false
+};
+```
+
+#### 5. YOLO（目标检测）
+
+```javascript
+const yoloTask = {
+  type: "object-detection",
+  payload: {
+    image_url: "https://example.com/image.jpg",
+    // 或者 base64 编码
+    image_base64: "data:image/jpeg;base64,//...",
+    model: "yolov8n",
+    confidence_threshold: 0.5,
+    nms_threshold: 0.45,
+    max_detections: 100
+  },
+  capabilities: ["yolo", "object-detection"],
+  async: true
+};
+```
+
+#### 6. OCR（文字识别）
+
+```javascript
+const ocrTask = {
+  type: "ocr",
+  payload: {
+    image_url: "https://example.com/document.png",
+    languages: ["chi_sim", "eng"],
+    detect_layout: true,
+    return_format: "json"  // json, text, pdf
+  },
+  capabilities: ["ocr", "paddle-ocr"],
+  async: true
+};
+```
+
+#### 7. 自定义 ML 模型
+
+```javascript
+const customTask = {
+  type: "custom-prediction",
+  payload: {
+    // 完全自定义的数据格式
+    input_features: [1.2, 3.4, 5.6, 7.8],
+    preprocessing: {
+      normalize: true,
+      scaling_method: "standard"
+    },
+    model_name: "my-custom-model-v2",
+    output_format: "probabilities"
+  },
+  capabilities: ["custom-ml"],
+  async: false
+};
+```
+
+### 后端服务集成指南
+
+#### 步骤 1：修改后端接收格式
+
+你的后端服务需要能够接收以下格式的请求：
+
+```javascript
+// POST /predict
+{
+  task_id: "系统生成的任务ID",
+  request: {
+    type: "任务类型",
+    payload: {
+      // 你的自定义字段
     }
-  }
+  },
+  callback_url: "回调URL（异步任务用）"
 }
 ```
 
-### Production
+#### 步骤 2：实现健康检查接口
 
-```jsonc
+```javascript
+// GET /health
+// 返回格式：
 {
-  "env": {
-    "production": {
-      "vars": {
-        "ENVIRONMENT": "production"
-      },
-      "routes": [
-        "api.your-domain.com/*"
-      ]
-    }
-  }
+  status: "healthy",
+  serverId: "你的服务器ID",  // 必须与注册时的ID匹配
+  capabilities: ["能力列表"]
 }
 ```
 
-## Custom Domains
+#### 步骤 3：处理异步回调（可选）
 
-### 1. Add Custom Domain
+对于异步任务，处理完成后需要回调：
 
-```bash
-# Add custom domain route
-wrangler route add api.your-domain.com/* --env production
-```
-
-### 2. Configure DNS
-
-Add CNAME record in Cloudflare DNS:
-
-```
-Type: CNAME
-Name: api
-Content: task-processor.<your-subdomain>.workers.dev
-Proxy: Yes (Orange cloud)
-```
-
-## Monitoring and Observability
-
-### 1. Enable Analytics
-
-```bash
-# View real-time logs
-wrangler tail --env production
-
-# View metrics
-wrangler analytics engine --env production
-```
-
-### 2. Set Up Alerts
-
-Configure alerts in Cloudflare Dashboard:
-- Workers > Your Worker > Analytics > Alerts
-- Set thresholds for errors, latency, requests
-
-### 3. Custom Metrics
-
-Implement custom metrics tracking:
-
-```typescript
-// In your worker code
-c.env.ANALYTICS.writeDataPoint({
-  dataset: 'task_metrics',
-  point: {
-    blobs: ['task_created'],
-    doubles: [1],
-    indexes: [Date.now()]
-  }
-});
-```
-
-## Performance Optimization
-
-### 1. Enable Caching
-
-```typescript
-// Cache static responses
-const cacheUrl = new URL(request.url);
-const cacheKey = new Request(cacheUrl.toString(), request);
-const cache = caches.default;
-
-let response = await cache.match(cacheKey);
-if (!response) {
-  response = await handleRequest(request);
-  c.env.ctx.waitUntil(cache.put(cacheKey, response.clone()));
-}
-```
-
-### 2. Optimize Bundle Size
-
-```bash
-# Check bundle size
-wrangler deploy --dry-run --outdir dist
-
-# Analyze bundle
-npm run analyze
-```
-
-### 3. Configure Limits
-
-```jsonc
+```javascript
+// PUT {callback_url}
 {
-  "limits": {
-    "cpu_ms": 50,
-    "memory_mb": 128
+  status: "COMPLETED",  // 或 "FAILED"
+  result: {
+    // 处理结果
+  },
+  metadata: {
+    processing_time: 1234,  // 毫秒
+    model_version: "1.0"
   }
 }
 ```
 
-## Rollback Procedures
+### 实际集成示例
 
-### 1. View Deployment History
+#### 示例：集成 Hugging Face 模型
 
-```bash
-# List deployments
-wrangler deployments list
+```javascript
+// 1. 注册 Hugging Face 推理服务器
+const hfServer = {
+  name: "HF-Inference-Server",
+  endpoints: {
+    predict: "http://your-server:8080/api/predict",
+    health: "http://your-server:8080/api/health"
+  },
+  apiKey: "your-api-key",  // 可选
+  capabilities: ["huggingface", "llm", "nlp"],
+  maxConcurrent: 10
+};
 
-# View specific deployment
-wrangler deployments view <deployment-id>
+// 2. 创建推理任务
+const hfTask = {
+  type: "text-generation",
+  payload: {
+    inputs: "The future of AI is",
+    parameters: {
+      max_new_tokens: 100,
+      temperature: 0.8,
+      top_p: 0.9,
+      do_sample: true
+    },
+    model_id: "meta-llama/Llama-2-7b-chat-hf"
+  },
+  capabilities: ["huggingface", "llm"],
+  async: true
+};
+
+// 3. 后端处理逻辑（Python示例）
+@app.post("/api/predict")
+async def predict(request: Request):
+    data = await request.json()
+    task_id = data["task_id"]
+    payload = data["request"]["payload"]
+    
+    # 调用 Hugging Face 模型
+    result = pipeline(
+        task="text-generation",
+        model=payload["model_id"]
+    )(payload["inputs"], **payload["parameters"])
+    
+    # 如果是异步任务，回调结果
+    if data.get("callback_url"):
+        await callback(data["callback_url"], {
+            "status": "COMPLETED",
+            "result": result
+        })
+    
+    return {"status": "processing"}
 ```
 
-### 2. Rollback to Previous Version
+## 📚 常见应用场景
 
-```bash
-# Rollback to specific deployment
-wrangler rollback <deployment-id> --env production
+### 场景 1：AI 图像处理服务
 
-# Or use percentage rollout
-wrangler rollback <deployment-id> --percentage 10
+```javascript
+// 1. 注册 GPU 服务器
+const server = {
+  name: "GPU-Server-1",
+  endpoints: {
+    predict: "http://gpu1.example.com:5000/predict",
+    health: "http://gpu1.example.com:5000/health",
+    metrics: "http://gpu1.example.com:5000/metrics"
+  },
+  capabilities: ["image", "stable-diffusion"],
+  maxConcurrent: 5,
+  priority: 2
+};
+
+// 2. 创建图像生成任务
+const task = {
+  type: "image-generation",
+  payload: {
+    prompt: "A beautiful sunset over mountains",
+    model: "stable-diffusion-xl",
+    steps: 50
+  },
+  capabilities: ["stable-diffusion"],
+  async: true
+};
 ```
 
-### 3. Emergency Rollback
+### 场景 2：视频处理集群
 
-```bash
-# Immediate rollback
-wrangler rollback --message "Emergency rollback" --env production
+```javascript
+// 1. 注册视频处理节点
+const videoServer = {
+  name: "Video-Worker-1",
+  endpoints: {
+    predict: "http://video1.example.com:8080/process",
+    health: "http://video1.example.com:8080/health"
+  },
+  capabilities: ["video", "transcoding", "1080p", "4k"],
+  maxConcurrent: 3
+};
+
+// 2. 创建视频转码任务
+const videoTask = {
+  type: "video-transcoding",
+  payload: {
+    input_url: "s3://bucket/input.mp4",
+    output_format: "webm",
+    resolution: "1080p",
+    bitrate: "5000k"
+  },
+  capabilities: ["video", "transcoding", "1080p"]
+};
 ```
 
-## Troubleshooting
+### 场景 3：数据处理管道
 
-### Common Issues
-
-#### 1. Durable Object Errors
-
-```bash
-# Check DO status
-wrangler tail --env production --filter "DO"
-
-# Reset DO state (caution!)
-wrangler durable-objects reset --env production
+```javascript
+// ETL 任务
+const etlTask = {
+  type: "etl-processing",
+  payload: {
+    source: "database://source",
+    transform: "aggregate",
+    destination: "warehouse://destination"
+  },
+  priority: 1,  // 高优先级
+  capabilities: ["etl", "sql"]
+};
 ```
 
-#### 2. Database Connection Issues
+## 🧪 测试验证
 
-```bash
-# Test database connection
-wrangler d1 execute TASK_DATABASE --command="SELECT 1"
+### 1. 生成测试 Token
 
-# Check migrations
-wrangler d1 migrations list TASK_DATABASE
-```
+```javascript
+// generate-jwt.js
+const jwt = require('jsonwebtoken');
 
-#### 3. Authentication Failures
-
-```bash
-# Verify JWT secret
-wrangler secret list
-
-# Test token generation
-JWT_SECRET=your-secret node generate-jwt.js
-```
-
-### Debug Mode
-
-Enable debug logging:
-
-```typescript
-// In src/index.ts
-const DEBUG = c.env.DEBUG === 'true';
-if (DEBUG) {
-  console.log('Request:', request);
-}
-```
-
-## Production Checklist
-
-### Pre-Deployment
-
-- [ ] All tests passing (`npm run test:e2e`)
-- [ ] TypeScript types generated (`npm run cf-typegen`)
-- [ ] Environment variables configured
-- [ ] JWT secret set securely
-- [ ] Database migrations applied
-- [ ] CORS origins configured
-
-### Post-Deployment
-
-- [ ] Health endpoint responding
-- [ ] API documentation accessible
-- [ ] Authentication working
-- [ ] Database queries functioning
-- [ ] Monitoring enabled
-- [ ] Alerts configured
-
-### Security
-
-- [ ] JWT secret rotated from development
-- [ ] CORS properly restricted
-- [ ] Rate limiting enabled
-- [ ] Input validation active
-- [ ] Error messages sanitized
-- [ ] HTTPS enforced
-
-## Scaling Considerations
-
-### Durable Object Limits
-
-- Max 1000 requests/second per DO instance
-- Consider sharding for high traffic:
-
-```typescript
-// Shard by task ID
-const shardId = hashCode(taskId) % SHARD_COUNT;
-const doId = c.env.TASK_INSTANCE.idFromName(`shard-${shardId}`);
-```
-
-### Database Optimization
-
-```sql
--- Add indexes for common queries
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_created ON tasks(created_at);
-CREATE INDEX idx_tasks_server ON tasks(server_id);
-```
-
-### Rate Limiting
-
-```typescript
-// Implement rate limiting
-const rateLimiter = new RateLimiter({
-  limit: 100,
-  window: 60000 // 1 minute
-});
-
-if (!rateLimiter.check(clientId)) {
-  return c.json({ error: 'Rate limited' }, 429);
-}
-```
-
-## Maintenance Mode
-
-### Enable Maintenance
-
-```typescript
-// Set in environment
-wrangler secret put MAINTENANCE_MODE --value="true"
-
-// Check in worker
-if (c.env.MAINTENANCE_MODE === 'true') {
-  return c.json({ 
-    error: 'System under maintenance',
-    retry_after: 3600 
-  }, 503);
-}
-```
-
-### Graceful Shutdown
-
-```typescript
-// Handle graceful shutdown
-c.env.ctx.waitUntil(
-  Promise.all([
-    flushMetrics(),
-    closeDatabaseConnections(),
-    notifyServers()
-  ])
+const token = jwt.sign(
+  {
+    sub: 'admin',
+    roles: ['admin']
+  },
+  'your-jwt-secret',
+  { expiresIn: '1h' }
 );
+
+console.log('Token:', token);
 ```
 
-## Support and Resources
+运行：`node generate-jwt.js`
 
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Durable Objects Guide](https://developers.cloudflare.com/workers/learning/using-durable-objects/)
-- [D1 Database Documentation](https://developers.cloudflare.com/d1/)
-- [Wrangler CLI Reference](https://developers.cloudflare.com/workers/wrangler/)
+### 2. 注册测试服务器
 
-For production support, contact Cloudflare support or open an issue in the repository.
+```bash
+curl -X POST https://your-worker.workers.dev/api/servers \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test-Server",
+    "endpoints": {
+      "predict": "http://localhost:8080/predict",
+      "health": "http://localhost:8080/health"
+    },
+    "capabilities": ["test"],
+    "maxConcurrent": 10
+  }'
+```
+
+### 3. 创建测试任务
+
+```bash
+curl -X POST https://your-worker.workers.dev/api/task \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "test",
+    "payload": {"message": "Hello World"},
+    "capabilities": ["test"]
+  }'
+```
+
+### 4. 查看任务状态
+
+```bash
+curl https://your-worker.workers.dev/api/task/{task-id} \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## ❓ 常见问题
+
+### Q1: 如何添加新的任务类型？
+
+只需要确保你的后端服务器能处理该类型，然后在创建任务时指定 `type` 和所需的 `capabilities`。
+
+### Q2: 如何监控系统状态？
+
+1. 查看服务器列表：`GET /api/servers`
+2. 查看任务统计：`GET /api/stats`
+3. 查看 API 文档：`GET /docs`
+
+### Q3: 如何处理任务失败？
+
+系统会自动重试失败的任务（最多 3 次）。你也可以手动重试：
+
+```bash
+curl -X POST https://your-worker.workers.dev/api/task/{task-id}/retry \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Q4: 如何扩展到更多服务器？
+
+只需注册更多服务器即可，系统会自动进行负载均衡：
+
+```javascript
+// 批量注册服务器
+for (let i = 1; i <= 10; i++) {
+  await registerServer({
+    name: `Server-${i}`,
+    endpoints: {
+      predict: `http://server${i}.example.com/predict`,
+      health: `http://server${i}.example.com/health`
+    }
+  });
+}
+```
+
+### Q5: 费用如何？
+
+Cloudflare Workers 免费套餐包括：
+- 每天 100,000 次请求
+- 10ms CPU 时间
+- 适合小型项目和测试
+
+生产环境建议使用付费套餐（$5/月起）。
+
+## 🔧 故障排查
+
+### 问题：任务一直是 PENDING 状态
+
+**原因**：没有可用的服务器或服务器能力不匹配
+
+**解决**：
+1. 检查是否有服务器注册：`GET /api/servers`
+2. 确认服务器的 `capabilities` 包含任务所需的能力
+3. 检查服务器健康状态
+
+### 问题：服务器频繁离线
+
+**原因**：健康检查失败或网络问题
+
+**解决**：
+1. 确保服务器的健康检查端点正常工作
+2. 调整 `SERVER_STALE_THRESHOLD` 为更大的值
+3. 检查服务器日志
+
+### 问题：JWT 认证失败
+
+**原因**：Token 过期或密钥不匹配
+
+**解决**：
+1. 重新生成 Token
+2. 确认 `JWT_SECRET` 一致
+3. 检查 Token 是否过期
+
+## 📖 下一步
+
+恭喜你完成了部署！接下来你可以：
+
+1. **阅读 API 文档**：访问 `https://your-worker.workers.dev/docs`
+2. **集成到你的应用**：使用任何语言的 HTTP 客户端调用 API
+3. **监控和优化**：通过 Cloudflare Dashboard 查看性能指标
+4. **扩展功能**：根据需求修改代码，添加新功能
+
+## 💬 获取帮助
+
+- 查看 [完整 API 文档](./API-REFERENCE.md)
+- 提交 [GitHub Issue](https://github.com/your-username/cf-worker-template/issues)
+- 加入社区讨论
+
+---
+
+🎉 **祝你使用愉快！** 如果这个项目对你有帮助，欢迎给个 Star ⭐

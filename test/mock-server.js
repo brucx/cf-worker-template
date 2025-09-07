@@ -50,6 +50,7 @@ function generateMockResult(requestData) {
   
   // Different responses based on model type
   let result = {
+    requestData,
     prediction: 'unknown',
     confidence: 0
   };

@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "cf-worker-vu",
+	"name": "cf-worker-template",
 	"main": "src/index.ts",
 	"compatibility_date": "2024-04-03",
 	"observability": {
@@ -60,8 +60,8 @@
 	"d1_databases": [
 		{
 			"binding": "TASK_DATABASE",
-			"database_name": "tasks-rename-me",
-			"database_id": "paste-from-cloudflare-dashboard",
+			"database_name": "tasks-test",
+			"database_id": "d51d93e4-c821-459d-8c88-703df8ae8f8b",
 			"migrations_dir": "src/migrations"
 		}
 	],
