@@ -204,9 +204,10 @@ const server = http.createServer(async (req, res) => {
     if (serverState.isHealthy) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
+        model: {
+          "server_id":SERVER_ID
+        },
         status: 'healthy',
-        serverId: SERVER_ID,  // Changed from server_id to serverId to match DO expectation
-        server_id: SERVER_ID,  // Keep for backward compatibility
         uptime: Math.floor((Date.now() - serverState.serverStartTime) / 1000),
         active_tasks: serverState.activeTasks,
         total_requests: serverState.requestCount,
@@ -220,8 +221,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         status: 'unhealthy',
-        serverId: SERVER_ID,  // Changed from server_id to serverId to match DO expectation
-        server_id: SERVER_ID,  // Keep for backward compatibility
+        model: {
+          "server_id":SERVER_ID
+        },
         error: 'Service temporarily unavailable',
         retry_after: 3
       }));

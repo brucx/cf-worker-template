@@ -13,6 +13,7 @@ const ServerConfigSchema = z.object({
     metrics: z.string().url().optional().default("http://localhost:8080/metrics"),
   }),
   apiKey: z.string().optional(),
+  async: z.boolean().optional().default(true),
   maxConcurrent: z.number().min(1).max(100).default(10),
   capabilities: z.array(z.string()).optional(),
   groups: z.array(z.string()).optional(),

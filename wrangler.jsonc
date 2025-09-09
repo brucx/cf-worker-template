@@ -71,8 +71,8 @@
 	 */
 	"vars": {
 		"WORKER_URL": "http://localhost:8787",
-		"SERVER_STALE_THRESHOLD": 30000,
-		"SERVER_CLEANUP_INTERVAL": 30000
+		"SERVER_STALE_THRESHOLD": 300000,
+		"SERVER_CLEANUP_INTERVAL": 60000
 	},
 	/**
 	 * Note: Use secrets to store sensitive data.

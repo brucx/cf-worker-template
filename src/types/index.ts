@@ -79,6 +79,7 @@ export interface ServerConfig {
     health: string;
     metrics?: string;
   };
+  async?: boolean;
   apiKey?: string;
   maxConcurrent: number;
   capabilities?: string[];

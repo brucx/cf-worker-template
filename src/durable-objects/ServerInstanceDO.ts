@@ -130,7 +130,7 @@ export class ServerInstanceDO extends DurableObject implements IServerInstance {
       this.updateMetrics(true, duration);
       
       // If synchronous task, wait for result
-      if (!task.request.async) {
+      if (!this.config!.async) {
         const result = await response.json();
         await this.sendTaskResult(task.taskId, result);
       }
@@ -159,8 +159,8 @@ export class ServerInstanceDO extends DurableObject implements IServerInstance {
       if (response.ok) {
         // Verify server ID matches
         const healthData = await response.json() as any;
-        if (healthData.serverId !== this.config.id) {
-          this.handleHealthFailure(`Server ID mismatch: expected ${this.config.id}, got ${healthData.serverId}`);
+        if (healthData.model.server_id !== this.config.id) {
+          this.handleHealthFailure(`Server ID mismatch: expected ${this.config.id}, got ${healthData.model.server_id}`);
         } else {
           await this.handleHealthSuccess();
         }

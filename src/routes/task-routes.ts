@@ -44,43 +44,54 @@ export class CreateTask extends OpenAPIRoute {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
       const taskId = generateId('task');
-      
+
       // Use new TaskInstanceDO with RPC
       const taskInstanceId = c.env.TASK_INSTANCE.idFromName(taskId);
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
-      
-      // Create task via RPC
-      const task = await taskInstance.createTask(data.body, taskId) as any;
-      
-      // Record task start in statistics
-      const statsId = c.env.TASK_STATS.idFromName(new Date().toISOString().slice(0, 10));
-      const stats = c.env.TASK_STATS.get(statsId);
-      await stats.recordTaskStart({ 
-        taskId: task.id,
-        serverId: task.serverId 
-      });
-      
-      // For synchronous tasks, return the result
-      if (!data.body.async && task.status === "COMPLETED") {
-        const response = {
+
+      if (data.body.async) {
+        // Create task via RPC
+        c.executionCtx.waitUntil(taskInstance.createTask(data.body, taskId) as any);
+        return c.json({
+          id: taskId,
+          status: 'PENDING',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      } else {
+        // Create task via RPC
+        const task = await taskInstance.createTask(data.body, taskId) as any;
+
+        // Record task start in statistics
+        const statsId = c.env.TASK_STATS.idFromName(new Date().toISOString().slice(0, 10));
+        const stats = c.env.TASK_STATS.get(statsId);
+        await stats.recordTaskStart({
+          taskId: task.id,
+          serverId: task.serverId
+        });
+
+        // For synchronous tasks, return the result
+        if (!data.body.async && task.status === "COMPLETED") {
+          const response = {
+            id: task.id,
+            status: task.status,
+            result: task.result,
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt
+          };
+          return c.json(response);
+        }
+
+        // For async tasks or errors, return status
+        const response: any = {
           id: task.id,
           status: task.status,
-          result: task.result,
+          error: task.error,
           createdAt: task.createdAt,
           updatedAt: task.updatedAt
         };
         return c.json(response);
       }
-      
-      // For async tasks or errors, return status
-      const response: any = {
-        id: task.id,
-        status: task.status,
-        error: task.error,
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt
-      };
-      return c.json(response);
     } catch (error) {
       logError('CreateTask', error);
       return handleError(error);
@@ -122,14 +133,14 @@ export class GetTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      
+
       // Use new TaskInstanceDO with RPC
       const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
-      
+
       // Get status via RPC
       const status = await taskInstance.getStatus();
-      
+
       return c.json(status);
     } catch (error) {
       logError('GetTask', error);
@@ -173,14 +184,14 @@ export class UpdateTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      
+
       // Use new TaskInstanceDO with RPC
       const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
-      
+
       // Update task via RPC
       const task = await taskInstance.updateTask(data.body);
-      
+
       return c.json({
         id: task.id,
         status: task.status,
@@ -221,14 +232,14 @@ export class RetryTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      
+
       // Use new TaskInstanceDO with RPC
       const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
-      
+
       // Retry via RPC
       const success = await taskInstance.retry();
-      
+
       return c.json({
         success,
         message: success ? "Task retry initiated" : "Task cannot be retried"
@@ -268,14 +279,14 @@ export class CancelTask extends OpenAPIRoute {
   async handle(c: AppContext) {
     try {
       const data = await this.getValidatedData<typeof this.schema>();
-      
+
       // Use new TaskInstanceDO with RPC
       const taskInstanceId = c.env.TASK_INSTANCE.idFromName(data.params.id);
       const taskInstance = c.env.TASK_INSTANCE.get(taskInstanceId);
-      
+
       // Cancel via RPC
       await taskInstance.cancel();
-      
+
       return c.json({
         success: true,
         message: "Task cancelled successfully"
